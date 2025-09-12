@@ -36,6 +36,16 @@ type ProviderMetadata struct {
 	IntrospectionEndpoint string `json:"introspection_endpoint"`
 }
 
+// STSTokenResponse holds the response from a token exchange request.
+type STSTokenResponse struct {
+	AccessToken     string `json:"access_token"`
+	IssuedTokenType string `json:"issued_token_type"`
+	TokenType       string `json:"token_type"`
+	ExpiresIn       int    `json:"expires_in"`
+	Scope           string `json:"scope,omitempty"`
+	RefreshToken    string `json:"refresh_token,omitempty"`
+}
+
 // ClientCredentials holds the client_id and client_secret after dynamic registration.
 type ClientCredentials struct {
 	ClientID     string `json:"client_id"`
@@ -115,6 +125,9 @@ var (
 	// issuerURL is now set via a command-line flag.
 	issuerURL string
 
+	// stsEnabled determines if STS token exchange should be performed
+	stsEnabled bool
+
 	// The local address our application will run on to handle the redirect.
 	redirectHost = "http://127.0.0.1:8080"
 	redirectPath = "/auth/callback"
@@ -133,6 +146,7 @@ var (
 func main() {
 	// Setup and parse the -idp flag for the issuer URL.
 	flag.StringVar(&issuerURL, "idp", "", "The issuer URL of the OpenID Connect provider (e.g., https://accounts.google.com)")
+	flag.BoolVar(&stsEnabled, "sts", false, "Enable STS token exchange using urn:ietf:params:oauth:grant-type:token-exchange")
 	flag.Parse()
 	if issuerURL == "" {
 		fmt.Println("Error: The -idp flag is required. Please provide the issuer URL of your OIDC provider.")
@@ -305,6 +319,19 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Success. UserInfo response received.\n")
+
+	// Step 8: Perform STS token exchange if -sts flag is enabled
+	if stsEnabled {
+		fmt.Println("\nStep 8: Performing STS token exchange...")
+		stsToken, err := performTokenExchange(ctx, tokens.AccessToken)
+		if err != nil {
+			fmt.Printf("❌ Error performing token exchange: %v\n", err)
+		} else {
+			fmt.Printf("✅ Success. Received exchanged token: %s...\n", stsToken.AccessToken[:20])
+			fmt.Println("\n--- STS Token Exchange Response ---")
+			fmt.Println(prettyPrint(stsToken))
+		}
+	}
 
 	// Display final results to the console
 	fmt.Println("\n---------------------- OIDC FLOW COMPLETE ----------------------")
@@ -643,4 +670,64 @@ func prettyPrintJSON(jsonStr string) string {
 		return jsonStr // Not valid JSON, return as is
 	}
 	return prettyPrint(v)
+}
+
+// performTokenExchange performs an OAuth 2.0 Token Exchange as per RFC 8693.
+func performTokenExchange(ctx context.Context, subjectToken string) (*STSTokenResponse, error) {
+	params := url.Values{}
+	params.Add("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
+	params.Add("subject_token", subjectToken)
+	params.Add("subject_token_type", "urn:ietf:params:oauth:token-type:access_token")
+	params.Add("requested_token_type", "urn:ietf:params:oauth:token-type:access_token")
+	params.Add("audience", clientCreds.ClientID)
+	params.Add("client_id", clientCreds.ClientID)
+	params.Add("client_secret", clientCreds.ClientSecret)
+	params.Add("scope", "openid profile")
+
+	req, err := http.NewRequestWithContext(ctx, "POST", providerMetadata.TokenEndpoint, strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var stsResponse STSTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&stsResponse); err != nil {
+		return nil, err
+	}
+
+	// Validate that the returned token has the required scopes
+	if !validateScopes(stsResponse.Scope, []string{"openid", "email", "profile"}) {
+		return nil, fmt.Errorf("token exchange returned insufficient scopes: got %s", stsResponse.Scope)
+	}
+
+	return &stsResponse, nil
+}
+
+// Helper function to validate scopes
+func validateScopes(returnedScope string, requiredScopes []string) bool {
+	returnedScopes := strings.Fields(returnedScope)
+	for _, required := range requiredScopes {
+		found := false
+		for _, returned := range returnedScopes {
+			if returned == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
