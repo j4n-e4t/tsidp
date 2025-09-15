@@ -40,7 +40,7 @@ docker run -d \
   -e TSNET_FORCE_LOGIN=1
   -e TAILSCALE_USE_WIP_CODE=1 \
   -v tsidp-data:/var/lib/tsidp \
-  tsidp --hostname=idp-test-docker --dir=/var/lib/tsidp
+  tsidp --hostname=idp --dir=/var/lib/tsidp
 ```
 
 Visit `https://idp.yourtailnet.ts.net` to confirm the service is running.
@@ -91,8 +91,8 @@ tsidp can be used as IdP server for any application that supports custom OIDC pr
 
 tsidp supports all of the endpoints required & suggested by the [MCP Authorization specification](https://modelcontextprotocol.io/specification/draft/basic/authorization), including Dynamic Client Registration (DCR). More information can be found in the following examples:
 
-- (TODO) MCP Client / Server
-- (TODO) MCP Client / Gateway Server
+- [MCP Client / Server](./examples/mcp-server/README.md)
+- [MCP Client / Gateway Server](./examples/mcp-gateway/README.md)
 
 ## tsidp Configuration Options
 
